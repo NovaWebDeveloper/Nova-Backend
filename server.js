@@ -146,7 +146,7 @@ app.post("/api/customer/register", async (req, res) => {
     }
 
     await transporter.sendMail({
-      from: process.env.EMAIL_USER,
+      from: process.env.EMAIL_FROM,
       to: email,
       subject: "NovaWeb Developer - OTP Verification",
       html: `
