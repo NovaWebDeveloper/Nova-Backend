@@ -17,6 +17,9 @@ const db = new Pool({
   database: process.env.DB_NAME,
   user: process.env.DB_USER,
   password: process.env.DB_PASSWORD,
+  ssl: {
+    rejectUnauthorized: false,
+  },
 });
 
 const transporter = nodemailer.createTransport({
@@ -29,6 +32,12 @@ const transporter = nodemailer.createTransport({
 
 app.get("/", (req, res) => {
   res.send("NovaWeb Backend Running");
+});
+
+app.get("/api/test-env", (req, res) => {
+  res.json({
+    jwt: process.env.JWT_SECRET ? "JWT found" : "JWT missing",
+  });
 });
 
 app.get("/api/test-db", async (req, res) => {
@@ -69,9 +78,11 @@ app.post("/api/admin/login", async (req, res) => {
   try {
     const { email, password } = req.body;
 
+    const cleanEmail = email.trim().toLowerCase();
+
     const result = await db.query(
-      "SELECT * FROM admin_users WHERE email = $1 AND password = $2",
-      [email, password]
+      "SELECT * FROM admin_users WHERE LOWER(email) = $1 AND password = $2",
+      [cleanEmail, password]
     );
 
     if (result.rows.length === 0) {
@@ -95,14 +106,17 @@ app.post("/api/admin/login", async (req, res) => {
 // Customer Register
 app.post("/api/customer/register", async (req, res) => {
   try {
-    const { name, email, password } = req.body;
+    let { name, email, password } = req.body;
 
     if (!name || !email || !password) {
       return res.status(400).json({ message: "All fields are required" });
     }
 
+    name = name.trim();
+    email = email.trim().toLowerCase();
+
     const existingUser = await db.query(
-      "SELECT * FROM customer_users WHERE email = $1",
+      "SELECT * FROM customer_users WHERE LOWER(email) = $1",
       [email]
     );
 
@@ -117,7 +131,7 @@ app.post("/api/customer/register", async (req, res) => {
       await db.query(
         `UPDATE customer_users
          SET name = $1, password = $2, otp = $3
-         WHERE email = $4`,
+         WHERE LOWER(email) = $4`,
         [name, hashedPassword, otp, email]
       );
     } else {
@@ -157,14 +171,17 @@ app.post("/api/customer/register", async (req, res) => {
 // Verify OTP
 app.post("/api/customer/verify-otp", async (req, res) => {
   try {
-    const { email, otp } = req.body;
+    let { email, otp } = req.body;
 
     if (!email || !otp) {
       return res.status(400).json({ message: "Email and OTP are required" });
     }
 
+    email = email.trim().toLowerCase();
+    otp = otp.trim();
+
     const result = await db.query(
-      "SELECT * FROM customer_users WHERE email = $1 AND otp = $2",
+      "SELECT * FROM customer_users WHERE LOWER(email) = $1 AND otp = $2",
       [email, otp]
     );
 
@@ -175,7 +192,7 @@ app.post("/api/customer/verify-otp", async (req, res) => {
     await db.query(
       `UPDATE customer_users
        SET is_verified = true, otp = null
-       WHERE email = $1`,
+       WHERE LOWER(email) = $1`,
       [email]
     );
 
@@ -191,33 +208,58 @@ app.post("/api/customer/verify-otp", async (req, res) => {
 // Customer Login
 app.post("/api/customer/login", async (req, res) => {
   try {
-    const { email, password } = req.body;
+    let { email, password } = req.body;
+
+    if (!email || !password) {
+      return res.status(400).json({
+        message: "Email and password are required",
+      });
+    }
+
+    email = email.trim().toLowerCase();
 
     const result = await db.query(
-      "SELECT * FROM customer_users WHERE email = $1",
+      "SELECT * FROM customer_users WHERE LOWER(email) = $1",
       [email]
     );
 
     if (result.rows.length === 0) {
-      return res.status(401).json({ message: "Invalid email or password" });
+      return res.status(401).json({
+        message: "Email not found",
+      });
     }
 
     const user = result.rows[0];
 
-    if (!user.is_verified) {
-      return res.status(403).json({ message: "Please verify your email first" });
+    console.log("Customer login attempt:", user.email);
+    console.log("Verified:", user.is_verified);
+
+    if (user.is_verified !== true) {
+      return res.status(403).json({
+        message: "Please verify your email first",
+      });
     }
 
     const isMatch = await bcrypt.compare(password, user.password);
 
+    console.log("Password match:", isMatch);
+
     if (!isMatch) {
-      return res.status(401).json({ message: "Invalid email or password" });
+      return res.status(401).json({
+        message: "Wrong password",
+      });
     }
 
     const token = jwt.sign(
-      { id: user.id, email: user.email, role: "customer" },
+      {
+        id: user.id,
+        email: user.email,
+        role: "customer",
+      },
       process.env.JWT_SECRET,
-      { expiresIn: "7d" }
+      {
+        expiresIn: "7d",
+      }
     );
 
     res.json({
@@ -230,7 +272,12 @@ app.post("/api/customer/login", async (req, res) => {
       },
     });
   } catch (err) {
-    res.status(500).json({ message: "Login failed", error: err.message });
+    console.log("Customer login backend error:", err.message);
+
+    res.status(500).json({
+      message: "Login failed",
+      error: err.message,
+    });
   }
 });
 
@@ -261,7 +308,12 @@ app.post("/api/chat/start", async (req, res) => {
       chatMessage: messageResult.rows[0],
     });
   } catch (err) {
-    res.status(500).json({ message: "Chat failed", error: err.message });
+    console.log("Chat start error:", err.message);
+
+    res.status(500).json({
+      message: "Chat failed",
+      error: err.message,
+    });
   }
 });
 
@@ -283,7 +335,12 @@ app.post("/api/chat/message", async (req, res) => {
 
     res.status(201).json({ message: "Message sent", data: result.rows[0] });
   } catch (err) {
-    res.status(500).json({ message: "Message failed", error: err.message });
+    console.log("Customer message error:", err.message);
+
+    res.status(500).json({
+      message: "Message failed",
+      error: err.message,
+    });
   }
 });
 
